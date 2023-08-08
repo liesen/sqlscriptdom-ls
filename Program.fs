@@ -4,12 +4,17 @@ open Ionide.LanguageServerProtocol
 open Ionide.LanguageServerProtocol.Server
 open Ionide.LanguageServerProtocol.Types
 
-
-type ScriptDomLspClient(sendServerNotification: ClientNotificationSender, sendServerRequest: ClientRequestSender) =
+type ScriptDomLspClient
+    (
+        sendServerNotification: ClientNotificationSender,
+        sendServerRequest: ClientRequestSender
+    ) =
     inherit LspClient()
 
-
-let initialize (client: ScriptDomLspClient) (paramz: InitializeParams) : AsyncLspResult<InitializeResult> =
+let initialize
+    (client: ScriptDomLspClient)
+    (paramz: InitializeParams)
+    : AsyncLspResult<InitializeResult> =
     async {
         do!
             client.WindowLogMessage
@@ -29,7 +34,10 @@ let initialize (client: ScriptDomLspClient) (paramz: InitializeParams) : AsyncLs
             |> LspResult.success
     }
 
-let initialized (client: ScriptDomLspClient) (paramz: InitializedParams) : AsyncLspResult<unit> =
+let initialized
+    (client: ScriptDomLspClient)
+    (paramz: InitializedParams)
+    : AsyncLspResult<unit> =
     async { return LspResult.success () }
 
 let textDocumentFormatting
@@ -51,7 +59,8 @@ let textDocumentFormatting
             { Range =
                 { Start = { Line = 0; Character = 0 }
                   End = { Line = 0; Character = 10 } }
-              NewText = sprintf "Hello from my own LSP: %O" paramz.TextDocument.Uri }
+              NewText =
+                sprintf "Hello from my own LSP: %O" paramz.TextDocument.Uri }
 
         let! formattingChanges = Array.singleton textEdit |> async.Return
         return formattingChanges |> Some |> LspResult.success
@@ -61,12 +70,17 @@ let setupRequestHandlings client =
     Map.ofList
         [ ("initialize", requestHandling (initialize client))
           ("initialized", requestHandling (initialized client))
-          ("textDocument/formatting", requestHandling (textDocumentFormatting client)) ]
-
+          ("textDocument/formatting",
+           requestHandling (textDocumentFormatting client)) ]
 
 printfn "Hello from F#"
 let stdin = Console.OpenStandardInput()
 let stdout = Console.OpenStandardOutput()
 
 printfn "%O"
-<| startWithSetup<ScriptDomLspClient> setupRequestHandlings stdin stdout ScriptDomLspClient defaultRpc
+<| startWithSetup<ScriptDomLspClient>
+    setupRequestHandlings
+    stdin
+    stdout
+    ScriptDomLspClient
+    defaultRpc
