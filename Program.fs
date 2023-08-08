@@ -73,14 +73,7 @@ let setupRequestHandlings client =
           ("textDocument/formatting",
            requestHandling (textDocumentFormatting client)) ]
 
-printfn "Hello from F#"
 let stdin = Console.OpenStandardInput()
 let stdout = Console.OpenStandardOutput()
-
-printfn "%O"
-<| startWithSetup<ScriptDomLspClient>
-    setupRequestHandlings
-    stdin
-    stdout
-    ScriptDomLspClient
-    defaultRpc
+startWithSetup setupRequestHandlings stdin stdout ScriptDomLspClient defaultRpc
+|> printfn "%O"
