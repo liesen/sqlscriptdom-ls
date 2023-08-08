@@ -1,8 +1,14 @@
 ﻿// For more information see https://aka.ms/fsharp-console-apps
 open System
+open System.IO
+open System.Web
 open Ionide.LanguageServerProtocol
 open Ionide.LanguageServerProtocol.Server
 open Ionide.LanguageServerProtocol.Types
+open Microsoft.SqlServer.TransactSql.ScriptDom
+
+// https://github.com/microsoft/lsprotocol/blob/main/packages/python/lsprotocol/validators.py#L31
+let UINTEGER_MAX_VALUE: int = (1 <<< 31) - 1
 
 type ScriptDomLspClient
     (
@@ -55,12 +61,20 @@ let textDocumentFormatting
                 { Type = MessageType.Warning
                   Message = sprintf "%O" paramz.TextDocument.Uri }
 
+        let parser = TSql160Parser(true)
+        let uri = new Uri(HttpUtility.UrlDecode(paramz.TextDocument.Uri))
+        use reader = new StreamReader(uri.LocalPath)
+        let fragment, errors = parser.Parse(reader)
+        let generator = Sql160ScriptGenerator()
+        let script: string = generator.GenerateScript(fragment)
+
         let textEdit: TextEdit =
             { Range =
                 { Start = { Line = 0; Character = 0 }
-                  End = { Line = 0; Character = 10 } }
-              NewText =
-                sprintf "Hello from my own LSP: %O" paramz.TextDocument.Uri }
+                  End =
+                    { Line = UINTEGER_MAX_VALUE
+                      Character = 0 } }
+              NewText = script }
 
         let! formattingChanges = Array.singleton textEdit |> async.Return
         return formattingChanges |> Some |> LspResult.success
@@ -75,5 +89,6 @@ let setupRequestHandlings client =
 
 let stdin = Console.OpenStandardInput()
 let stdout = Console.OpenStandardOutput()
+
 startWithSetup setupRequestHandlings stdin stdout ScriptDomLspClient defaultRpc
 |> printfn "%O"
