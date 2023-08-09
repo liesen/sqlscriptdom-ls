@@ -17,6 +17,12 @@ type ScriptDomLspClient
     ) =
     inherit LspClient()
 
+    override this.TextDocumentPublishDiagnostics
+        (paramz: PublishDiagnosticsParams)
+        : Async<unit> =
+        sendServerNotification "textDocument/publishDiagnostics" (box paramz)
+        |> Async.Ignore
+
 let initialize
     (client: ScriptDomLspClient)
     (paramz: InitializeParams)
@@ -46,38 +52,58 @@ let initialized
     : AsyncLspResult<unit> =
     async { return LspResult.success () }
 
+let convertParseErrorToDiagnostic (error: ParseError) : Diagnostic =
+    { Range =
+        { Start =
+            { Line = error.Line
+              Character = error.Column }
+          End =
+            { Line = error.Line
+              Character = error.Column } }
+      Severity = Some DiagnosticSeverity.Error
+      Code = None
+      CodeDescription = None
+      Source = Some "sqlscriptdom-ls"
+      Message = error.Message
+      RelatedInformation = None
+      Tags = None
+      Data = None }
+
 let textDocumentFormatting
     (client: ScriptDomLspClient)
     (paramz: DocumentFormattingParams)
     : AsyncLspResult<TextEdit[] option> =
     async {
-        do!
-            client.WindowLogMessage
-                { Type = MessageType.Warning
-                  Message = sprintf "%O" paramz.TextDocument.Uri }
-
-        do!
-            client.WindowShowMessage
-                { Type = MessageType.Warning
-                  Message = sprintf "%O" paramz.TextDocument.Uri }
-
         let parser = TSql160Parser(true)
         let uri = new Uri(HttpUtility.UrlDecode(paramz.TextDocument.Uri))
         use reader = new StreamReader(uri.LocalPath)
         let fragment, errors = parser.Parse(reader)
-        let generator = Sql160ScriptGenerator()
-        let script: string = generator.GenerateScript(fragment)
 
-        let textEdit: TextEdit =
-            { Range =
-                { Start = { Line = 0; Character = 0 }
-                  End =
-                    { Line = UINTEGER_MAX_VALUE
-                      Character = 0 } }
-              NewText = script }
+        if errors.Count = 0 then
+            let generator = Sql160ScriptGenerator()
+            let script: string = generator.GenerateScript(fragment)
 
-        let! formattingChanges = Array.singleton textEdit |> async.Return
-        return formattingChanges |> Some |> LspResult.success
+            let textEdit: TextEdit =
+                { Range =
+                    { Start = { Line = 0; Character = 0 }
+                      End =
+                        { Line = UINTEGER_MAX_VALUE
+                          Character = 0 } }
+                  NewText = script }
+
+            return Some [| textEdit |] |> LspResult.success
+        else
+            do!
+                client.TextDocumentPublishDiagnostics
+                    { Uri = paramz.TextDocument.Uri
+                      Version = None
+                      Diagnostics =
+                        errors
+                        |> Seq.map convertParseErrorToDiagnostic
+                        |> Seq.toArray }
+
+            return None |> LspResult.success
+
     }
 
 let setupRequestHandlings client =
