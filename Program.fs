@@ -38,7 +38,11 @@ let initialize
             { InitializeResult.Default with
                 Capabilities =
                     { ServerCapabilities.Default with
-                        DocumentFormattingProvider = Some true } }
+                        DocumentFormattingProvider = Some true
+                        TextDocumentSync =
+                            Some
+                                { TextDocumentSyncOptions.Default with
+                                    OpenClose = Some true } } }
             |> LspResult.success
     }
 
@@ -71,6 +75,28 @@ let convertParseErrorToDiagnostic (error: ParseError) : Diagnostic =
       RelatedInformation = None
       Tags = None
       Data = None }
+
+let textDocumentDidOpen
+    (client: ScriptDomLspClient)
+    (paramz: DidOpenTextDocumentParams)
+    : AsyncLspResult<unit> =
+    async {
+        let parser = TSql160Parser(true)
+        use reader = new StringReader(paramz.TextDocument.Text)
+        let fragment, errors = parser.Parse(reader)
+
+        if errors.Count > 0 then
+            do!
+                client.TextDocumentPublishDiagnostics
+                    { Uri = paramz.TextDocument.Uri
+                      Version = None
+                      Diagnostics =
+                        errors
+                        |> Seq.map convertParseErrorToDiagnostic
+                        |> Seq.toArray }
+
+        return LspResult.success ()
+    }
 
 let textDocumentFormatting
     (client: ScriptDomLspClient)
@@ -112,6 +138,7 @@ let setupRequestHandlings client =
     Map.ofList
         [ ("initialize", requestHandling (initialize client))
           ("initialized", requestHandling (initialized client))
+          ("textDocument/didOpen", requestHandling (textDocumentDidOpen client))
           ("textDocument/formatting",
            requestHandling (textDocumentFormatting client)) ]
 
