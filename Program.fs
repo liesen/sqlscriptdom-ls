@@ -17,6 +17,12 @@ type ScriptDomLspClient
     ) =
     inherit LspClient()
 
+    override this.WindowLogMessage(paramz: LogMessageParams) : Async<unit> =
+        sendServerNotification "window/logMessage" (box paramz) |> Async.Ignore
+
+    override this.WindowShowMessage(paramz: ShowMessageParams) : Async<unit> =
+        sendServerNotification "window/showMessage" (box paramz) |> Async.Ignore
+
     override this.TextDocumentPublishDiagnostics
         (paramz: PublishDiagnosticsParams)
         : Async<unit> =
@@ -28,16 +34,6 @@ let initialize
     (paramz: InitializeParams)
     : AsyncLspResult<InitializeResult> =
     async {
-        do!
-            client.WindowLogMessage
-                { Type = MessageType.Warning
-                  Message = "Initialize called" }
-
-        do!
-            client.WindowShowMessage
-                { Type = MessageType.Warning
-                  Message = "Initialize called" }
-
         return
             { InitializeResult.Default with
                 Capabilities =
@@ -50,7 +46,14 @@ let initialized
     (client: ScriptDomLspClient)
     (paramz: InitializedParams)
     : AsyncLspResult<unit> =
-    async { return LspResult.success () }
+    async {
+        do!
+            client.WindowShowMessage
+                { Type = MessageType.Info
+                  Message = "sqlscriptdom-ls initialized" }
+
+        return LspResult.success ()
+    }
 
 let convertParseErrorToDiagnostic (error: ParseError) : Diagnostic =
     { Range =
@@ -103,7 +106,6 @@ let textDocumentFormatting
                         |> Seq.toArray }
 
             return None |> LspResult.success
-
     }
 
 let setupRequestHandlings client =
