@@ -198,10 +198,48 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
         async {
             let! tokens, errors = client.AddOrUpdateTokens paramz.TextDocument
 
-            if errors.Count > 0 then
-                return LspResult.success None
-            else
-                return LspResult.success None
+            let data =
+                tokens
+                // Keep only keywords
+                |> Seq.filter (fun token -> token.IsKeyword())
+                // Make tokens 0-indexed
+                |> Seq.map (fun token ->
+                    TSqlParserToken(
+                        token.TokenType,
+                        token.Offset,
+                        token.Text,
+                        token.Line - 1,
+                        token.Column - 1
+                    ))
+                // Make token positions relative
+                |> Seq.scan
+                    (fun (prev: TSqlParserToken) (curr: TSqlParserToken) ->
+                        let deltaLine = curr.Line - prev.Line
+
+                        let deltaStartChar =
+                            if deltaLine = 0 then
+                                curr.Column - prev.Column
+                            else
+                                curr.Column
+
+                        TSqlParserToken(
+                            curr.TokenType,
+                            curr.Offset,
+                            curr.Text,
+                            deltaLine,
+                            deltaStartChar
+                        ))
+                    (TSqlParserToken(TSqlTokenType.None, 0, "", 0, 0))
+                // Encode
+                |> Seq.collect (fun token ->
+                    [| uint32 token.Line
+                       uint32 token.Column
+                       uint32 token.Text.Length
+                       0u // Keyword
+                       0u |])
+                |> Seq.toArray
+
+            return Some { Data = data; ResultId = None } |> LspResult.success
         }
 
 let stdin = Console.OpenStandardInput()
