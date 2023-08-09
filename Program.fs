@@ -49,7 +49,7 @@ type ScriptDomLspClient
         |> Async.Ignore
 
     member this.PublishDiagnosticsForParseErrors
-        (textDocumentUri: string)
+        (textDocumentUri: DocumentUri)
         (errors: IList<ParseError>)
         : Async<unit> =
         this.TextDocumentPublishDiagnostics
@@ -58,7 +58,7 @@ type ScriptDomLspClient
               Diagnostics =
                 errors |> Seq.map convertParseErrorToDiagnostic |> Seq.toArray }
 
-    member this.GetDocumentStream(textDocumentUri: string) =
+    member this.GetDocumentStream(textDocumentUri: DocumentUri) =
         let localPath = Uri(HttpUtility.UrlDecode(textDocumentUri)).LocalPath
         new StreamReader(localPath)
 
