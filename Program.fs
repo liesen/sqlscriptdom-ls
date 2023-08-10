@@ -178,7 +178,11 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
             if errors.Count > 0 then
                 return None |> LspResult.success
             else
-                let generator = Sql160ScriptGenerator()
+                let opts = SqlScriptGeneratorOptions()
+                opts.IndentationSize <- paramz.Options.TabSize
+                opts.AlignClauseBodies <- false
+                opts.AlignColumnDefinitionFields <- false
+                let generator = Sql160ScriptGenerator(opts)
                 let script: string = generator.GenerateScript(fragment)
 
                 let textEdit: TextEdit =
