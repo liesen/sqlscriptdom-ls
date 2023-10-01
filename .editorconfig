@@ -1,3 +1,6 @@
 [*.{fs,fsx}]
 max_line_length = 80
 fsharp_keep_max_number_of_blank_lines = 1
+
+[*.{sql}]
+test_option = 1

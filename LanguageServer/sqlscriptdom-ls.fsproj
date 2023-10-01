@@ -6,12 +6,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Workspace.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="FsPretty" Version="0.2.0" />
     <PackageReference Include="Ionide.LanguageServerProtocol" Version="0.4.17" />
     <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="161.8905.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Formatter/formatter.fsproj" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,6 @@
-﻿// For more information see https://aka.ms/fsharp-console-apps
-open System
+﻿open System
+open System.Net
+open System.Net.Sockets
 open System.Collections.Generic
 open System.Collections.Concurrent
 open System.IO
@@ -8,18 +9,23 @@ open Ionide.LanguageServerProtocol
 open Ionide.LanguageServerProtocol.Server
 open Ionide.LanguageServerProtocol.Types
 open Microsoft.SqlServer.TransactSql.ScriptDom
+open FsPretty.Rendering
+
+open Workspace
+open Formatter
+
+// Idea from clangd -input-mirror-file=
+let inputMirrorFile = "./input-mirror.log"
 
 // https://github.com/microsoft/lsprotocol/blob/main/packages/python/lsprotocol/validators.py#L31
 let UINTEGER_MAX_VALUE: int = (1 <<< 31) - 1
 
 let convertParseErrorToDiagnostic (error: ParseError) : Diagnostic =
-    { Range =
-        { Start =
-            { Line = error.Line
-              Character = error.Column }
-          End =
-            { Line = error.Line
-              Character = error.Column } }
+    let pos =
+        { Line = error.Line
+          Character = error.Column }
+
+    { Range = { Start = pos; End = pos }
       Severity = Some DiagnosticSeverity.Error
       Code = Some(sprintf "%d" error.Number)
       CodeDescription = None
@@ -124,6 +130,7 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
                 { InitializeResult.Default with
                     Capabilities =
                         { ServerCapabilities.Default with
+                            CodeActionProvider = Some(First true)
                             DocumentFormattingProvider = Some true
                             TextDocumentSync =
                                 Some
@@ -175,6 +182,12 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
             let! fragment, errors =
                 client.AddOrUpdateDocument paramz.TextDocument.Uri
 
+            do!
+                client.WindowLogMessage
+                    { Type = MessageType.Warning
+                      Message =
+                        (serialize paramz.Options.AdditionalData).ToString() }
+
             if errors.Count > 0 then
                 return None |> LspResult.success
             else
@@ -183,7 +196,16 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
                 opts.AlignClauseBodies <- false
                 opts.AlignColumnDefinitionFields <- false
                 let generator = Sql160ScriptGenerator(opts)
+                let formatter = MySqlScriptGenerator(opts, generator)
+                // ScriptGenerator is Visitor + ScriptWriter ie
+                // ScriptGenerator<string>. Would be nice with
+                // a parameterized version to ScriptGenerator<Doc>
+                fragment.Accept(formatter)
+                let script = displayString formatter.Doc
+                (*
                 let script: string = generator.GenerateScript(fragment)
+                return None |> LspResult.success
+                *)
 
                 let textEdit: TextEdit =
                     { Range =
@@ -194,6 +216,23 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
                       NewText = script }
 
                 return Some [| textEdit |] |> LspResult.success
+        }
+
+    override this.TextDocumentCodeAction
+        (paramz: CodeActionParams)
+        : AsyncLspResult<TextDocumentCodeActionResult option> =
+        async {
+            let codeAction: CodeAction =
+                { Title = "Where do you want to go today?"
+                  Kind = None
+                  Diagnostics = None
+                  IsPreferred = None
+                  Disabled = None
+                  Edit = None
+                  Command = None
+                  Data = None }
+
+            return Some [| Second codeAction |] |> LspResult.success
         }
 
     override this.TextDocumentSemanticTokensFull
@@ -246,13 +285,24 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
             return Some { Data = data; ResultId = None } |> LspResult.success
         }
 
-let stdin = Console.OpenStandardInput()
-let stdout = Console.OpenStandardOutput()
+(*
+let server = new TcpListener(IPAddress.Parse("127.0.0.1"), 6008)
+server.Start()
+
+let client = server.AcceptTcpClient()
+printfn "Connected!"
+
+let input = client.GetStream()
+let output = input;
+*)
+
+let input = Console.OpenStandardInput()
+let output = Console.OpenStandardOutput()
 
 start
     (defaultRequestHandlings ())
-    stdin
-    stdout
+    input
+    output
     ScriptDomLspClient
     (fun client -> new ScriptDomLspServer(client))
     defaultRpc
