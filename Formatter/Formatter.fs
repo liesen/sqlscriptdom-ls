@@ -44,6 +44,18 @@ module PrettyPrint =
         function
         | :? JoinTableReference as tableReference ->
             ppJoinTableReference gen tableReference
+        | :? NamedTableReference as tableReference ->
+            ppFragmentIfNotNull' gen tableReference
+        | :? SchemaObjectFunctionTableReference as tableReference ->
+            let schemaObjectName =
+                ppFragmentIfNotNull' gen tableReference.SchemaObject
+
+            let parameters =
+                Seq.map (ppFragmentIfNotNull' gen) tableReference.Parameters
+                |> Seq.toList
+
+            schemaObjectName <+> lparen <+> align (vcat (punctuate comma parameters)) <+> rparen
+        | tableReference -> failwith <| tableReference.ToString()
 
     // https://github.com/microsoft/SqlScriptDOM/blob/main/SqlScriptDom/ScriptDom/SqlServer/ScriptGenerator/SqlScriptGeneratorVisitor.FromClause.cs
     let generateFromClause (gen: SqlScriptGenerator) (node: FromClause) : Doc =
@@ -184,20 +196,42 @@ type MySqlScriptGenerator
             -- cat
             SELECT 1, 2, 3
 
-            -- I like this one: hangy?
+            -- I like this one: "continuous line indent"
             SELECT 1,
                 2,
                 3
+                
+            EXEC f 1,
+                2,
+                3
+                
+            SELECT *
+            FROM f(1,
+                2,
+                3)
+                
+            -- use_continuous_line_indent_in_method_pars
+            SELECT *
+            FROM f(1,
+                2, 
+                3
+                )
 
-            -- hcat
+            -- align_multiline_{argument, parameter} = hcat
+            -- sql: align_multiline_{select_elements, 
+            -- ... catch all with align_multiline_lists?
             SELECT 1,
                    2,
                    3
+                   
+            SELECT *
+            FROM f(1,
+                   2,
+                   3)
             *)
             let selectElement =
-                PrettyPrint.hangy options (text "SELECT" :: selectElements)
-            // text "SELECT" <+> align (vcat selectElements)
-            // text "SELECT" <+> PrettyPrint.hangy options selectElements
+                // text "SELECT" <+> PrettyPrint.hangy options selectElements
+                text "SELECT" <+> align (vcat selectElements)
 
             let fromClause =
                 PrettyPrint.generateFromClause
@@ -209,13 +243,10 @@ type MySqlScriptGenerator
                     underlying
                     querySpecification.WhereClause
 
-            // let orderByClause =
-            //     PrettyPrint.ppFragmentIfNotNull'
-            //         underlying
-            //         querySpecification.OrderByClause
-            let v = new MySqlScriptGenerator(options, underlying)
-            querySpecification.OrderByClause.Accept(v)
-            let orderByClause = v.Doc
+            let orderByClause =
+                PrettyPrint.ppFragmentIfNotNull'
+                    underlying
+                    querySpecification.OrderByClause
 
             let groupByClause =
                 PrettyPrint.ppFragmentIfNotNull'
@@ -229,6 +260,13 @@ type MySqlScriptGenerator
                           whereClause
                           orderByClause
                           groupByClause ] // </> whereClause
+
+            this.Doc <-
+                selectElement
+                <+> fromClause
+                <+> whereClause
+                <+> orderByClause
+                <+> groupByClause
         | _ -> ()
 
     member this.keyword(kw: string) : Doc =
