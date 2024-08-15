@@ -12,16 +12,11 @@ module PrettyPrint =
     ///   c
     /// FROM table
     /// </example>
-    let hangy (opts: SqlScriptGeneratorOptions) =
+    let continuousIndent (opts: SqlScriptGeneratorOptions) : Doc list -> Doc =
         function
         | [] -> empty
         | [ x ] -> x
-        | x :: y :: ys -> x <+> y <**> indent opts.IndentationSize (vcat ys)
-
-    let hangz (opts: SqlScriptGeneratorOptions) (x: Doc) : Doc list -> Doc =
-        function
-        | [] -> x
-        | y :: ys -> x <+> y <**> align (indent opts.IndentationSize (vcat ys))
+        | x :: ys -> x <**> align (indent opts.IndentationSize (vcat ys))
 
     let ppFragmentIfNotNull'
         (gen: SqlScriptGenerator)
@@ -54,7 +49,10 @@ module PrettyPrint =
                 Seq.map (ppFragmentIfNotNull' gen) tableReference.Parameters
                 |> Seq.toList
 
-            schemaObjectName <+> lparen <+> align (vcat (punctuate comma parameters)) <+> rparen
+            schemaObjectName
+            </> parens (
+                continuousIndent gen.Options (punctuate comma parameters)
+            )
         | tableReference -> failwith <| tableReference.ToString()
 
     // https://github.com/microsoft/SqlScriptDOM/blob/main/SqlScriptDom/ScriptDom/SqlServer/ScriptGenerator/SqlScriptGeneratorVisitor.FromClause.cs
@@ -119,12 +117,7 @@ module PrettyPrint =
         | :? BooleanComparisonExpression as expr ->
             ppBooleanComparisonExpression gen expr
         | :? BooleanParenthesisExpression as expr ->
-            let booleanExpression = ppBooleanExpression gen expr.Expression
-
-            lparen
-            <*> indent gen.Options.IndentationSize booleanExpression
-            <*> rparen
-            |> align
+            ppBooleanExpression gen expr.Expression |> parens
         | :? BooleanBinaryExpression as expr ->
             let firstExpression = ppBooleanExpression gen expr.FirstExpression
             let secondExpression = ppBooleanExpression gen expr.SecondExpression
@@ -132,15 +125,9 @@ module PrettyPrint =
             let binaryExpressionType =
                 ppBooleanBinaryExpressionType expr.BinaryExpressionType
 
-            firstExpression
-            <*> indent
-                    gen.Options.IndentationSize
-                    (binaryExpressionType <+> secondExpression)
-            |> ignore
-
-            vcat
+            continuousIndent
+                gen.Options
                 [ firstExpression; (binaryExpressionType <+> secondExpression) ]
-            |> align
         | _ -> failwith "not implemented"
 
     let generateWhereClause
@@ -191,7 +178,6 @@ type MySqlScriptGenerator
 
                     text script)
                 |> Seq.toList
-                |> punctuate comma
             (*
             -- cat
             SELECT 1, 2, 3
@@ -229,9 +215,13 @@ type MySqlScriptGenerator
                    2,
                    3)
             *)
+
             let selectElement =
                 // text "SELECT" <+> PrettyPrint.hangy options selectElements
-                text "SELECT" <+> align (vcat selectElements)
+                text "SELECT"
+                <+> PrettyPrint.continuousIndent
+                        underlying.Options
+                        (punctuate comma selectElements)
 
             let fromClause =
                 PrettyPrint.generateFromClause
@@ -255,18 +245,10 @@ type MySqlScriptGenerator
 
             this.Doc <-
                 selectElement
-                </> vcat
-                        [ fromClause
-                          whereClause
-                          orderByClause
-                          groupByClause ] // </> whereClause
-
-            this.Doc <-
-                selectElement
-                <+> fromClause
-                <+> whereClause
-                <+> orderByClause
-                <+> groupByClause
+                <**> fromClause
+                <**> whereClause
+                <**> orderByClause
+                <**> groupByClause
         | _ -> ()
 
     member this.keyword(kw: string) : Doc =
@@ -288,4 +270,4 @@ type MySqlScriptGenerator
                         text (underlying.GenerateScript expr))
                     |> Seq.toList
                     |> punctuate comma)
-                |> PrettyPrint.hangy options
+                |> PrettyPrint.continuousIndent options
