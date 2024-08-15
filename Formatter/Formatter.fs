@@ -5,36 +5,32 @@ open FsPretty.PrettyPrint
 // open Ionide.LanguageServerProtocol.Types
 open Microsoft.SqlServer.TransactSql.ScriptDom
 
-type BooleanExpressionVisitor(gen: SqlScriptGenerator) =
-    inherit TSqlConcreteFragmentVisitor()
-
-    override this.ExplicitVisit(node: BooleanBinaryExpression) =
-        node.FirstExpression.Accept(this)
-
 module PrettyPrint =
+    /// <example>
+    /// SELECT a,
+    ///   b,
+    ///   c
+    /// FROM table
+    /// </example>
     let hangy (opts: SqlScriptGeneratorOptions) =
         function
         | [] -> empty
         | [ x ] -> x
         | x :: y :: ys -> x <+> y <**> indent opts.IndentationSize (vcat ys)
 
-    let hangz (x: Doc) : Doc list -> Doc =
+    let hangz (opts: SqlScriptGeneratorOptions) (x: Doc) : Doc list -> Doc =
         function
         | [] -> x
-        | y :: ys -> x <+> y <**> align (indent 2 (vcat ys))
+        | y :: ys -> x <+> y <**> align (indent opts.IndentationSize (vcat ys))
 
     let ppFragmentIfNotNull'
         (gen: SqlScriptGenerator)
         (fragment: TSqlFragment)
         =
-        printfn "Generate fragment if not null"
-
         if fragment = null then
             empty
         else
             text <| gen.GenerateScript fragment
-
-    let ppCommaSeparatedList xs = ()
 
     let ppJoinTableReference
         (gen: SqlScriptGenerator)
@@ -61,27 +57,32 @@ module PrettyPrint =
                 |> Seq.toList
                 |> punctuate comma
 
-            printfn "%A" items
             text "FROM" <+> hcat items)
         |> Option.defaultValue empty
+
+    let ppSimpleCaseExpression
+        (gen: SqlScriptGenerator)
+        (caseExpression: SimpleCaseExpression)
+        : Doc =
+        let whenClauses =
+            caseExpression.WhenClauses
+            |> Seq.map (ppFragmentIfNotNull' gen)
+            |> Seq.toList
+            |> hcat
+
+        [ text "CASE"
+          indent gen.Options.IndentationSize whenClauses
+          text "END" ]
+        |> vcat
+        |> align
 
     let ppScalarExpression (gen: SqlScriptGenerator) : ScalarExpression -> Doc =
         function
         | :? SimpleCaseExpression as caseExpression ->
-            let whenClauses =
-                caseExpression.WhenClauses
-                |> Seq.map (ppFragmentIfNotNull' gen)
-                |> Seq.toList
-                |> hcat
-
-            [ text "CASE"
-              indent gen.Options.IndentationSize whenClauses
-              text "END" ]
-            |> vcat
-            |> align
+            ppSimpleCaseExpression gen caseExpression
         | fragment -> ppFragmentIfNotNull' gen fragment
 
-    let ppComparisonType: BooleanComparisonType -> Doc =
+    let ppBooleanComparisonType: BooleanComparisonType -> Doc =
         function
         | BooleanComparisonType.Equals -> text "="
         | BooleanComparisonType.GreaterThan -> text ">"
@@ -91,6 +92,12 @@ module PrettyPrint =
         | BooleanBinaryExpressionType.And -> text "AND"
         | BooleanBinaryExpressionType.Or -> text "OR"
 
+    let ppBooleanComparisonExpression gen (expr: BooleanComparisonExpression) =
+        let firstExpression = ppScalarExpression gen expr.FirstExpression
+        let secondExpression = ppScalarExpression gen expr.SecondExpression
+        let comparisonType = ppBooleanComparisonType expr.ComparisonType
+        firstExpression <+> comparisonType <+> secondExpression
+
     let rec ppBooleanExpression
         (gen: SqlScriptGenerator)
         : BooleanExpression -> Doc =
@@ -98,10 +105,7 @@ module PrettyPrint =
 
         function
         | :? BooleanComparisonExpression as expr ->
-            let firstExpression = ppScalarExpression gen expr.FirstExpression
-            let secondExpression = ppScalarExpression gen expr.SecondExpression
-            let comparisonType = ppComparisonType expr.ComparisonType
-            firstExpression <+> comparisonType <+> secondExpression
+            ppBooleanComparisonExpression gen expr
         | :? BooleanParenthesisExpression as expr ->
             let booleanExpression = ppBooleanExpression gen expr.Expression
 
@@ -118,15 +122,14 @@ module PrettyPrint =
 
             firstExpression
             <*> indent
-                gen.Options.IndentationSize
-                (binaryExpressionType <+> secondExpression)
+                    gen.Options.IndentationSize
+                    (binaryExpressionType <+> secondExpression)
             |> ignore
 
             vcat
                 [ firstExpression; (binaryExpressionType <+> secondExpression) ]
             |> align
         | _ -> failwith "not implemented"
-    // generateFragmentIfNotNull' gen node
 
     let generateWhereClause
         (gen: SqlScriptGenerator)
@@ -142,8 +145,7 @@ module PrettyPrint =
 type MySqlScriptGenerator
     (
         // client: LspClient,
-        options: SqlScriptGeneratorOptions,
-        underlying: SqlScriptGenerator
+        options: SqlScriptGeneratorOptions, underlying: SqlScriptGenerator
     ) =
     inherit TSqlFragmentVisitor()
 
@@ -193,15 +195,10 @@ type MySqlScriptGenerator
                    3
             *)
             let selectElement =
-                // PrettyPrint.hangy options (text "SELECT" :: selectElements)
-                text "SELECT" <+> align (vcat selectElements)
+                PrettyPrint.hangy options (text "SELECT" :: selectElements)
+            // text "SELECT" <+> align (vcat selectElements)
+            // text "SELECT" <+> PrettyPrint.hangy options selectElements
 
-            (*
-            let fromClause =
-                Option.ofObj querySpecification.FromClause
-                |> Option.map (text << underlying.GenerateScript)
-                |> Option.defaultValue empty
-            *)
             let fromClause =
                 PrettyPrint.generateFromClause
                     underlying
@@ -211,12 +208,46 @@ type MySqlScriptGenerator
                 PrettyPrint.generateWhereClause
                     underlying
                     querySpecification.WhereClause
-            (*
-            let whereClauseVisitor =
-                MySqlScriptGenerator(client, options, underlying)
 
-            querySpecification.FromClause.Accept(whereClauseVisitor)
-            let whereClause = whereClauseVisitor.Doc
-            *)
-            this.Doc <- selectElement </> fromClause </> whereClause
+            // let orderByClause =
+            //     PrettyPrint.ppFragmentIfNotNull'
+            //         underlying
+            //         querySpecification.OrderByClause
+            let v = new MySqlScriptGenerator(options, underlying)
+            querySpecification.OrderByClause.Accept(v)
+            let orderByClause = v.Doc
+
+            let groupByClause =
+                PrettyPrint.ppFragmentIfNotNull'
+                    underlying
+                    querySpecification.GroupByClause
+
+            this.Doc <-
+                selectElement
+                </> vcat
+                        [ fromClause
+                          whereClause
+                          orderByClause
+                          groupByClause ] // </> whereClause
         | _ -> ()
+
+    member this.keyword(kw: string) : Doc =
+        match options.KeywordCasing with
+        | KeywordCasing.Lowercase -> kw.ToLowerInvariant()
+        | KeywordCasing.PascalCase -> kw
+        | KeywordCasing.Uppercase -> kw.ToUpperInvariant()
+        | _ -> failwith "Unknown keyword casing"
+        |> text
+
+    override this.ExplicitVisit(node: OrderByClause) =
+        this.Doc <-
+            if node = null then
+                empty
+            else
+                this.keyword "ORDER BY"
+                :: (node.OrderByElements
+                    |> Seq.map (fun expr ->
+                        text (underlying.GenerateScript expr))
+                    |> Seq.toList
+                    |> punctuate comma)
+                |> PrettyPrint.hangy options
