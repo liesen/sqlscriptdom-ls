@@ -12,11 +12,20 @@ module PrettyPrint =
     ///   c
     /// FROM table
     /// </example>
+    (*
     let continuousIndent (opts: SqlScriptGeneratorOptions) : Doc list -> Doc =
         function
         | [] -> empty
         | [ x ] -> x
-        | x :: ys -> x <**> align (indent opts.IndentationSize (vcat ys))
+        | x :: ys -> x <*> (indent opts.IndentationSize (vcat ys))
+    *)
+
+    let continuousIndent (opts: SqlScriptGeneratorOptions) = align << vcat
+
+    let punctuateBack sep =
+        List.mapi (fun i doc -> if i = 0 then doc else sep <<>> doc)
+
+    let sepByCommaBack = punctuateBack (comma <<>> space)
 
     let ppFragmentIfNotNull'
         (gen: SqlScriptGenerator)
@@ -51,7 +60,7 @@ module PrettyPrint =
 
             schemaObjectName
             </> parens (
-                continuousIndent gen.Options (punctuate comma parameters)
+                continuousIndent gen.Options (sepByCommaBack parameters)
             )
         | tableReference -> failwith <| tableReference.ToString()
 
@@ -67,7 +76,12 @@ module PrettyPrint =
                 |> Seq.toList
                 |> punctuate comma
 
-            text "FROM" <+> hcat items)
+            (if gen.Options.NewLineBeforeFromClause then
+                 linebreak
+             else
+                 empty)
+            <<>> text "FROM"
+            <+> hcat items)
         |> Option.defaultValue empty
 
     let ppSimpleCaseExpression
@@ -138,7 +152,14 @@ module PrettyPrint =
         |> Option.bind (fun whereClause ->
             Option.ofObj whereClause.SearchCondition)
         |> Option.map (fun searchCondition ->
-            text "WHERE" <+> ppBooleanExpression gen searchCondition)
+            let newLineBeforeWhereClause =
+                if gen.Options.NewLineBeforeWhereClause then
+                    linebreak
+                else
+                    empty
+
+            newLineBeforeWhereClause <<>> text "WHERE"
+            <+> ppBooleanExpression gen searchCondition)
         |> Option.defaultValue empty
 
 type MySqlScriptGenerator
@@ -264,10 +285,10 @@ type MySqlScriptGenerator
             if node = null then
                 empty
             else
-                this.keyword "ORDER BY"
-                :: (node.OrderByElements
-                    |> Seq.map (fun expr ->
-                        text (underlying.GenerateScript expr))
-                    |> Seq.toList
-                    |> punctuate comma)
-                |> PrettyPrint.continuousIndent options
+                text "ORDER BY"
+                <+> (node.OrderByElements
+                     |> Seq.map (fun expr ->
+                         text (underlying.GenerateScript expr))
+                     |> Seq.toList
+                     |> punctuate comma
+                     |> PrettyPrint.continuousIndent options)
