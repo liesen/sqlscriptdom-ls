@@ -10,6 +10,9 @@ open System.Collections.Generic
 let ppIfNotNull pp =
     Option.defaultValue empty << Option.map pp << Option.ofObj
 
+let pp (gen: SqlScriptGenerator) =
+    Option.map (text << gen.GenerateScript) << Option.ofObj
+
 let indent' (opts: SqlScriptGeneratorOptions) = indent opts.IndentationSize
 
 /// <example>
@@ -80,6 +83,24 @@ let ppFromClause gen =
                 text "FROM"
                 <+> continuousIndent gen.Options (punctuate comma items))
             fromClause.TableReferences
+
+let generateFromClause
+    (gen: SqlScriptGenerator)
+    (node: FromClause)
+    : Doc option =
+    Option.ofObj node
+    |> Option.bind (fun fromClause -> Option.ofObj fromClause.TableReferences)
+    |> Option.map (fun tableReferences ->
+        let items =
+            tableReferences |> Seq.map (ppTableReference gen) |> Seq.toList
+
+        let newLineBeforeFromClause =
+            if gen.Options.NewLineBeforeFromClause then
+                linebreak
+            else
+                empty
+
+        continuousIndent gen.Options (punctuate comma items))
 
 let ppSimpleCaseExpression
     (gen: SqlScriptGenerator)
@@ -154,24 +175,27 @@ let generateWhereClause (gen: SqlScriptGenerator) (node: WhereClause) : Doc =
 
 type FormattingVisitor
     (editorconfig: FileConfiguration, underlying: SqlScriptGenerator) =
-    inherit TSqlFragmentVisitor()
+    inherit TSqlConcreteFragmentVisitor()
 
     [<DefaultValue>]
     val mutable Doc: Doc
 
-    let docs = LinkedList<Doc>()
+    override this.ExplicitVisit(node: TSqlBatch) =
+        let statements =
+            node.Statements
+            |> Seq.map (fun statement ->
+                let formatter = FormattingVisitor(editorconfig, underlying)
+                statement.Accept(formatter)
+                formatter.Doc)
+            |> Seq.toList
 
-    member this.Docs = docs
-
-    (*
-    override this.Visit(fragment: TSqlFragment) =
-        // client.WindowShowMessage
-        //     { Type = MessageType.Info
-        //       Message = "Formatting" }
-        // |> Async.RunSynchronously
-        // fragment.AcceptChildren(this)
-        printfn "%O" fragment
-    *)
+        this.Doc <-
+            (if underlying.Options.IncludeSemicolons then
+                 punctuate semi statements
+             else
+                 statements)
+            |> punctuate linebreak
+            |> vcat
 
     override this.ExplicitVisit(node: SimpleCaseExpression) =
         printfn "SimpleCaseExpression"
@@ -179,77 +203,94 @@ type FormattingVisitor
     override this.ExplicitVisit(node: BooleanBinaryExpression) =
         this.Doc <- text "BooleanBinaryExpression"
 
-    override this.ExplicitVisit(node: SelectStatement) =
-        match node.QueryExpression with
-        | :? QuerySpecification as querySpecification ->
-            let selectElements =
-                querySpecification.SelectElements
-                |> Seq.map (text << underlying.GenerateScript)
-                |> Seq.toList
-            (*
-            -- cat
-            SELECT 1, 2, 3
+    override this.ExplicitVisit(querySpecification: QuerySpecification) =
+        (*
+        <query_specification> ::=   
+        SELECT [ ALL | DISTINCT ]   
+            [TOP ( expression ) [PERCENT] [ WITH TIES ] ]   
+            < select_list >   
+            [ INTO new_table ]   
+            [ FROM { <table_source> } [ ,...n ] ]   
+            [ WHERE <search_condition> ]   
+            [ <GROUP BY> ]   
+            [ HAVING < search_condition > ]
+        *)
+        let selectElements =
+            querySpecification.SelectElements
+            |> Seq.map (text << underlying.GenerateScript)
+            |> Seq.toList
 
-            -- I like this one: "continuous line indent"
-            SELECT 1,
-                2,
-                3
-                
-            EXEC f 1,
-                2,
-                3
-                
-            SELECT *
-            FROM f(1,
-                2,
-                3)
-                
-            -- use_continuous_line_indent_in_method_pars
-            SELECT *
-            FROM f(1,
-                2, 
-                3
+        let selectElement =
+            Some(
+                text "SELECT",
+                continuousIndent
+                    underlying.Options
+                    (punctuate comma selectElements)
+            )
+            
+        let fromClause =
+            Option.ofObj querySpecification.FromClause
+            |> Option.bind (fun fromClause ->
+                Option.ofObj fromClause.TableReferences)
+            |> Option.map (fun tableReferences ->
+                let items =
+                    tableReferences
+                    |> Seq.map (ppTableReference underlying)
+                    |> Seq.toList
+
+                let newLineBeforeFromClause =
+                    if underlying.Options.NewLineBeforeFromClause then
+                        linebreak
+                    else
+                        empty
+
+                continuousIndent underlying.Options (punctuate comma items))
+            |> Option.map (fun body -> text "FROM", body)
+
+        let whereClause =
+            Option.ofObj querySpecification.WhereClause
+            |> Option.bind (fun whereClause ->
+                Option.ofObj whereClause.SearchCondition)
+            |> Option.map (fun searchCondition ->
+                let newLineBeforeWhereClause =
+                    if underlying.Options.NewLineBeforeWhereClause then
+                        linebreak
+                    else
+                        empty
+
+                ppBooleanExpression underlying searchCondition)
+            |> Option.map (fun body -> text "WHERE", body)
+
+        let orderByClause =
+            pp underlying querySpecification.OrderByClause
+            |> Option.map (fun body -> text "ORDER BY", body)
+
+        let groupByClause =
+            pp underlying querySpecification.GroupByClause
+            |> Option.map (fun body -> text "GROUP BY", body)
+            
+        let havingClause =
+            pp underlying querySpecification.HavingClause
+            |> Option.map (fun body -> text "HAVING", body)
+
+        let clauses =
+            [ selectElement
+              fromClause
+              whereClause
+              orderByClause
+              groupByClause 
+              havingClause ]
+            |> List.collect Option.toList
+
+        this.Doc <-
+            if false && underlying.Options.AlignClauseBodies then
+                let (labels, bodies) = List.unzip clauses
+                // Doesn't work
+                beside (align (vcat labels)) (align (vcat bodies))
+            else
+                vcat (
+                    List.map (fun (label, body) -> label <+> body) clauses
                 )
-
-            -- align_multiline_{argument, parameter} = hcat
-            -- sql: align_multiline_{select_elements, 
-            -- ... catch all with align_multiline_lists?
-            SELECT 1,
-                   2,
-                   3
-                   
-            SELECT *
-            FROM f(1,
-                   2,
-                   3)
-            *)
-
-            let selectElement =
-                text "SELECT"
-                <+> continuousIndent
-                        underlying.Options
-                        (punctuate comma selectElements)
-
-            let fromClause =
-                ppFromClause underlying querySpecification.FromClause
-
-            let whereClause =
-                generateWhereClause underlying querySpecification.WhereClause
-
-            let orderByClause =
-                ppFragmentIfNotNull' underlying querySpecification.OrderByClause
-
-            let groupByClause =
-                ppFragmentIfNotNull' underlying querySpecification.GroupByClause
-
-            selectElement
-            <**> fromClause
-            <**> whereClause
-            <**> orderByClause
-            <**> groupByClause
-            |> docs.AddLast
-            |> ignore
-        | _ -> ()
 
     member this.keyword(kw: string) : Doc =
         match underlying.Options.KeywordCasing with
@@ -288,7 +329,7 @@ let ppScript (editorconfig: FileConfiguration) (reader: TextReader) =
     errors |> Seq.iter (fun e -> printfn "%A" e.Message)
 
     fragment.Accept(formatter)
-    let mutable output = displayString (vcat (formatter.Docs |> List.ofSeq))
+    let mutable output = displayString formatter.Doc
 
     if editorconfig.TrimTrailingWhitespace.GetValueOrDefault(false) then
         output <- output.TrimEnd()
