@@ -195,13 +195,8 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
                 opts.IndentationSize <- paramz.Options.TabSize
                 opts.AlignClauseBodies <- false
                 opts.AlignColumnDefinitionFields <- false
-                let generator = Sql160ScriptGenerator(opts)
-                let formatter = MySqlScriptGenerator(opts, generator)
-                // ScriptGenerator is Visitor + ScriptWriter ie
-                // ScriptGenerator<string>. Would be nice with
-                // a parameterized version to ScriptGenerator<Doc>
-                fragment.Accept(formatter)
-                let script = displayString formatter.Doc
+                let reader = new StreamReader(paramz.TextDocument.Uri)
+                let script, errors = ppScript reader
                 (*
                 let script: string = generator.GenerateScript(fragment)
                 return None |> LspResult.success
