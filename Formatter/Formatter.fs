@@ -5,6 +5,10 @@ open Microsoft.SqlServer.TransactSql.ScriptDom
 open System.IO
 open FsPretty.Rendering
 open EditorConfig.Core
+open System.Collections.Generic
+
+let ppIfNotNull pp =
+    Option.defaultValue empty << Option.map pp << Option.ofObj
 
 let indent' (opts: SqlScriptGeneratorOptions) = indent opts.IndentationSize
 
@@ -27,11 +31,8 @@ let punctuateBack sep =
 
 let sepByCommaBack = punctuateBack (comma <<>> space)
 
-let ppFragmentIfNotNull' (gen: SqlScriptGenerator) (fragment: TSqlFragment) =
-    if fragment = null then
-        empty
-    else
-        text <| gen.GenerateScript fragment
+let ppFragmentIfNotNull' (gen: SqlScriptGenerator) =
+    ppIfNotNull (text << gen.GenerateScript)
 
 let ppJoinTableReference
     (gen: SqlScriptGenerator)
@@ -60,21 +61,25 @@ let ppTableReference (gen: SqlScriptGenerator) : TableReference -> Doc =
     | tableReference -> failwith <| tableReference.ToString()
 
 // https://github.com/microsoft/SqlScriptDOM/blob/main/SqlScriptDom/ScriptDom/SqlServer/ScriptGenerator/SqlScriptGeneratorVisitor.FromClause.cs
-let generateFromClause (gen: SqlScriptGenerator) (node: FromClause) : Doc =
-    Option.ofObj node
-    |> Option.bind (fun fromClause -> Option.ofObj fromClause.TableReferences)
-    |> Option.map (fun tableReferences ->
-        let items =
-            tableReferences |> Seq.map (ppTableReference gen) |> Seq.toList
+let ppFromClause gen =
+    ppIfNotNull
+    <| fun (fromClause: FromClause) ->
+        ppIfNotNull
+            (fun tableReferences ->
+                let items =
+                    tableReferences
+                    |> Seq.map (ppTableReference gen)
+                    |> Seq.toList
 
-        let newLineBeforeFromClause =
-            if gen.Options.NewLineBeforeFromClause then
-                linebreak
-            else
-                empty
+                let newLineBeforeFromClause =
+                    if gen.Options.NewLineBeforeFromClause then
+                        linebreak
+                    else
+                        empty
 
-        text "FROM" <+> continuousIndent gen.Options (punctuate comma items))
-    |> Option.defaultValue empty
+                text "FROM"
+                <+> continuousIndent gen.Options (punctuate comma items))
+            fromClause.TableReferences
 
 let ppSimpleCaseExpression
     (gen: SqlScriptGenerator)
@@ -154,6 +159,10 @@ type FormattingVisitor
     [<DefaultValue>]
     val mutable Doc: Doc
 
+    let docs = LinkedList<Doc>()
+
+    member this.Docs = docs
+
     (*
     override this.Visit(fragment: TSqlFragment) =
         // client.WindowShowMessage
@@ -222,7 +231,7 @@ type FormattingVisitor
                         (punctuate comma selectElements)
 
             let fromClause =
-                generateFromClause underlying querySpecification.FromClause
+                ppFromClause underlying querySpecification.FromClause
 
             let whereClause =
                 generateWhereClause underlying querySpecification.WhereClause
@@ -233,12 +242,13 @@ type FormattingVisitor
             let groupByClause =
                 ppFragmentIfNotNull' underlying querySpecification.GroupByClause
 
-            this.Doc <-
-                selectElement
-                <**> fromClause
-                <**> whereClause
-                <**> orderByClause
-                <**> groupByClause
+            selectElement
+            <**> fromClause
+            <**> whereClause
+            <**> orderByClause
+            <**> groupByClause
+            |> docs.AddLast
+            |> ignore
         | _ -> ()
 
     member this.keyword(kw: string) : Doc =
@@ -278,7 +288,7 @@ let ppScript (editorconfig: FileConfiguration) (reader: TextReader) =
     errors |> Seq.iter (fun e -> printfn "%A" e.Message)
 
     fragment.Accept(formatter)
-    let mutable output = displayString formatter.Doc
+    let mutable output = displayString (vcat (formatter.Docs |> List.ofSeq))
 
     if editorconfig.TrimTrailingWhitespace.GetValueOrDefault(false) then
         output <- output.TrimEnd()
