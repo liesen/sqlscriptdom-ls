@@ -282,7 +282,7 @@ let ppScript (editorconfig: FileConfiguration) (reader: TextReader) =
 
     if editorconfig.TrimTrailingWhitespace.GetValueOrDefault(false) then
         output <- output.TrimEnd()
-        
+
     if editorconfig.InsertFinalNewline.GetValueOrDefault(false) then
         output <- output + "\n"
 
