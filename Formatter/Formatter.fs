@@ -71,17 +71,16 @@ module PrettyPrint =
             Option.ofObj fromClause.TableReferences)
         |> Option.map (fun tableReferences ->
             let items =
-                tableReferences
-                |> Seq.map (ppTableReference gen)
-                |> Seq.toList
-                |> punctuate comma
+                tableReferences |> Seq.map (ppTableReference gen) |> Seq.toList
 
-            (if gen.Options.NewLineBeforeFromClause then
-                 linebreak
-             else
-                 empty)
-            <<>> text "FROM"
-            <+> hcat items)
+            let newLineBeforeFromClause =
+                if gen.Options.NewLineBeforeFromClause then
+                    linebreak
+                else
+                    empty
+
+            text "FROM"
+            <+> continuousIndent gen.Options (punctuate comma items))
         |> Option.defaultValue empty
 
     let ppSimpleCaseExpression
@@ -158,7 +157,7 @@ module PrettyPrint =
                 else
                     empty
 
-            newLineBeforeWhereClause <<>> text "WHERE"
+            text "WHERE"
             <+> ppBooleanExpression gen searchCondition)
         |> Option.defaultValue empty
 
@@ -193,11 +192,7 @@ type MySqlScriptGenerator
         | :? QuerySpecification as querySpecification ->
             let selectElements =
                 querySpecification.SelectElements
-                |> Seq.map (fun (selectElement: SelectElement) ->
-                    let script: string =
-                        underlying.GenerateScript(selectElement)
-
-                    text script)
+                |> Seq.map (text << underlying.GenerateScript)
                 |> Seq.toList
             (*
             -- cat
@@ -238,7 +233,6 @@ type MySqlScriptGenerator
             *)
 
             let selectElement =
-                // text "SELECT" <+> PrettyPrint.hangy options selectElements
                 text "SELECT"
                 <+> PrettyPrint.continuousIndent
                         underlying.Options

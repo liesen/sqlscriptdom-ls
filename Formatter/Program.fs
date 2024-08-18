@@ -12,6 +12,9 @@ let test (opts: FileConfiguration) =
         "select 1, 2, 3 from f(1, 2, 3) where a = b and b = c and c = d AND (a = b OR c = d)"
 
     let opts = SqlScriptGeneratorOptions()
+    opts.IndentationSize <- 2
+    opts.NewLineBeforeFromClause <- false
+    opts.NewLineBeforeGroupByClause <- false
     let generator = Sql160ScriptGenerator(opts)
     let formatter = MySqlScriptGenerator(opts, generator)
     let parser = TSql160Parser(true)
