@@ -3,8 +3,8 @@ max_line_length = 80
 fsharp_keep_max_number_of_blank_lines = 1
 
 [*.sql]
-indent_size = 2
 continuous_indent_multiplier = 1
+indent_size = 2
 sql_space_after_comma = true
-# sql_style_place_list_items_on_new
 sql_use_continuous_line_indent_in_ = true
+trim_trailing_whitespace = true

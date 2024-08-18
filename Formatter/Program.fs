@@ -9,7 +9,7 @@ let test (opts: FileConfiguration) =
         "select 1, 2, 3 from f(1, 2, 3) where a = b and b = c and c = d AND (a = b OR c = d)"
 
     let reader = new StringReader(sql)
-    let script, errors = ppScript reader
+    let script, errors = ppScript opts reader
 
     let expected =
         @"
@@ -43,7 +43,7 @@ let main args =
     opts.AlignColumnDefinitionFields <- false
 
     use reader = new StreamReader(args.[0])
-    let script, errors = ppScript reader
+    let script, errors = ppScript editorconfig reader
 
     errors |> Seq.iter (fun parseError -> printfn "%O" parseError)
     printfn "%s" script

@@ -13,6 +13,7 @@ open FsPretty.Rendering
 
 open Workspace
 open Formatter
+open EditorConfig.Core
 
 // Idea from clangd -input-mirror-file=
 let inputMirrorFile = "./input-mirror.log"
@@ -182,6 +183,9 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
             let! fragment, errors =
                 client.AddOrUpdateDocument paramz.TextDocument.Uri
 
+            let editorconfig =
+                EditorConfigParser().Parse(paramz.TextDocument.Uri)
+
             do!
                 client.WindowLogMessage
                     { Type = MessageType.Warning
@@ -196,7 +200,7 @@ type ScriptDomLspServer(client: ScriptDomLspClient) =
                 opts.AlignClauseBodies <- false
                 opts.AlignColumnDefinitionFields <- false
                 let reader = new StreamReader(paramz.TextDocument.Uri)
-                let script, errors = ppScript reader
+                let script, errors = ppScript editorconfig reader
                 (*
                 let script: string = generator.GenerateScript(fragment)
                 return None |> LspResult.success

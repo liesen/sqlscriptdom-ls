@@ -4,6 +4,9 @@ open FsPretty.PrettyPrint
 open Microsoft.SqlServer.TransactSql.ScriptDom
 open System.IO
 open FsPretty.Rendering
+open EditorConfig.Core
+
+let indent' (opts: SqlScriptGeneratorOptions) = indent opts.IndentationSize
 
 /// <example>
 /// SELECT a,
@@ -11,15 +14,13 @@ open FsPretty.Rendering
 ///   c
 /// FROM table
 /// </example>
-(*
 let continuousIndent (opts: SqlScriptGeneratorOptions) : Doc list -> Doc =
     function
     | [] -> empty
     | [ x ] -> x
-    | x :: ys -> x <*> (indent opts.IndentationSize (vcat ys))
-*)
+    | x :: ys -> x <*> indent' opts (vcat ys)
 
-let continuousIndent (opts: SqlScriptGeneratorOptions) = align << vcat
+// let continuousIndent (opts: FileConfiguration) = align << vcat
 
 let punctuateBack sep =
     List.mapi (fun i doc -> if i = 0 then doc else sep <<>> doc)
@@ -146,7 +147,8 @@ let generateWhereClause (gen: SqlScriptGenerator) (node: WhereClause) : Doc =
         text "WHERE" <+> ppBooleanExpression gen searchCondition)
     |> Option.defaultValue empty
 
-type FormattingVisitor(underlying: SqlScriptGenerator) =
+type FormattingVisitor
+    (editorconfig: FileConfiguration, underlying: SqlScriptGenerator) =
     inherit TSqlFragmentVisitor()
 
     [<DefaultValue>]
@@ -260,14 +262,28 @@ type FormattingVisitor(underlying: SqlScriptGenerator) =
                      |> punctuate comma
                      |> continuousIndent underlying.Options)
 
-let ppScript (reader: TextReader) =
+let ppScript (editorconfig: FileConfiguration) (reader: TextReader) =
     let opts = SqlScriptGeneratorOptions()
+
+    opts.IndentationSize <-
+        editorconfig.IndentSize.NumberOfColumns.GetValueOrDefault(
+            opts.IndentationSize
+        )
+
     let generator = Sql160ScriptGenerator(opts)
-    let formatter = FormattingVisitor(generator)
+    let formatter = FormattingVisitor(editorconfig, generator)
 
     let parser = TSql160Parser(true)
     let fragment, errors = parser.Parse(reader)
     errors |> Seq.iter (fun e -> printfn "%A" e.Message)
 
     fragment.Accept(formatter)
-    displayString formatter.Doc, errors
+    let mutable output = displayString formatter.Doc
+
+    if editorconfig.TrimTrailingWhitespace.GetValueOrDefault(false) then
+        output <- output.TrimEnd()
+        
+    if editorconfig.InsertFinalNewline.GetValueOrDefault(false) then
+        output <- output + "\n"
+
+    output, errors
