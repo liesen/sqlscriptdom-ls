@@ -1,11 +1,14 @@
-module Tests
+module Trivial
 
-open System.IO
+open EditorConfig.Core
 open Expecto
 open Expecto.Flip
 open Formatter
-open EditorConfig.Core
+open FsPretty.PrettyPrint
+open FsPretty.Rendering
 open Microsoft.SqlServer.TransactSql.ScriptDom
+open System.IO
+// open StrictlyPretty
 
 let editorconfig = EditorConfigParser().Parse("test.sql")
 
@@ -81,24 +84,4 @@ let tests =
               let input = new StringReader("SELECT 1, 2, 3 FROM [table]")
               let actual, errors = ppScript editorconfig input
 
-              Expect.equal "Equal" "SELECT 1,\n  2,\n  3\nFROM [table]" actual
-
-          (*
-          testCase "X"
-          <| fun _ ->
-              let input =
-                  new StringReader(
-                      @"create database d1 containment = partial with nested_triggers = on, 
-trustworthy on, 
-transform_noise_words=off, 
-default_language=[french],
-default_fulltext_language=1033,
-two_digit_year_cutoff=2000"
-                  )
-
-              let actual, errors = ppScript editorconfig input
-
-              Expect.equal "Equal" "SELECT 1,\n  2,\n  3\nFROM [table]" actual
-          *)
-          //
-          ]
+              Expect.equal "Equal" "SELECT 1,\n  2,\n  3\nFROM [table]" actual ]

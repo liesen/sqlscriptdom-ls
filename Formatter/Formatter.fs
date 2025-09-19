@@ -1,9 +1,10 @@
 module Formatter
 
 open FsPretty.PrettyPrint
+open FsPretty.Rendering
+// open StrictlyPretty
 open Microsoft.SqlServer.TransactSql.ScriptDom
 open System.IO
-open FsPretty.Rendering
 open EditorConfig.Core
 open System.Collections.Generic
 
@@ -29,8 +30,13 @@ let continuousIndent (opts: SqlScriptGeneratorOptions) : Doc list -> Doc =
 
 // let continuousIndent (opts: FileConfiguration) = align << vcat
 
+// Adds a separator between all elements, but not at the beginning or end
 let punctuateBack sep =
     List.mapi (fun i doc -> if i = 0 then doc else sep <<>> doc)
+
+// Adds a separator between all elements and inserts a space between separator and doc, but not at the beginning or end
+let punctuateBack_ sep =
+    List.mapi (fun i doc -> if i = 0 then doc else sep <+> doc)
 
 let sepByCommaBack = punctuateBack (comma <<>> space)
 
@@ -60,7 +66,7 @@ let ppTableReference (gen: SqlScriptGenerator) : TableReference -> Doc =
             |> Seq.toList
 
         schemaObjectName
-        </> parens (continuousIndent gen.Options (sepByCommaBack parameters))
+        <*> parens (continuousIndent gen.Options (sepByCommaBack parameters))
     | tableReference -> failwith <| tableReference.ToString()
 
 // https://github.com/microsoft/SqlScriptDOM/blob/main/SqlScriptDom/ScriptDom/SqlServer/ScriptGenerator/SqlScriptGeneratorVisitor.FromClause.cs
@@ -177,31 +183,89 @@ type FormattingVisitor
     (editorconfig: FileConfiguration, underlying: SqlScriptGenerator) =
     inherit TSqlConcreteFragmentVisitor()
 
-    [<DefaultValue>]
-    val mutable Doc: Doc
+    let Docs: Stack<Doc> = Stack<Doc>()
+
+    member this.Doc: Doc = Docs.Peek()
+
+    member this.Format(node: TSqlFragment) : Doc =
+        printfn "Format: %A" node
+        node.Accept(this)
+
+        if Docs.Count <> 1 then
+            failwithf
+                "%A: Expected exactly one doc on stack, but got %d"
+                node
+                Docs.Count
+
+        Docs.Pop()
+
+    member this.Format_(node: TSqlFragment) : Doc =
+        Option.ofObj node |> Option.map this.Format |> Option.defaultValue empty
+
+    override this.ExplicitVisit(node: SelectStarExpression) : unit =
+        Docs.Push(text <| underlying.GenerateScript node)
+
+    override this.ExplicitVisit(node: NamedTableReference) =
+        Docs.Push(text <| underlying.GenerateScript node)
 
     override this.ExplicitVisit(node: TSqlBatch) =
-        let statements =
-            node.Statements
-            |> Seq.map (fun statement ->
-                let formatter = FormattingVisitor(editorconfig, underlying)
-                statement.Accept(formatter)
-                formatter.Doc)
-            |> Seq.toList
+        let statements = node.Statements |> Seq.map this.Format |> Seq.toList
 
-        this.Doc <-
-            (if underlying.Options.IncludeSemicolons then
-                 punctuate semi statements
-             else
-                 statements)
+        Docs.Push(
+            if underlying.Options.IncludeSemicolons then
+                punctuate semi statements
+            else
+                statements
             |> punctuate linebreak
             |> vcat
+        )
 
     override this.ExplicitVisit(node: SimpleCaseExpression) =
         printfn "SimpleCaseExpression"
+        Docs.Push(text <| underlying.GenerateScript node)
+
+    override this.ExplicitVisit(node: BooleanParenthesisExpression) =
+        let expr = this.Format_ node.Expression
+        group (lparen <<>> group (expr <<>> rparen)) |> Docs.Push
 
     override this.ExplicitVisit(node: BooleanBinaryExpression) =
-        this.Doc <- text "BooleanBinaryExpression"
+        let op =
+            match node.BinaryExpressionType with
+            | BooleanBinaryExpressionType.And -> "AND"
+            | BooleanBinaryExpressionType.Or -> "OR"
+            | _ -> failwith "Unexpected binary expression type"
+
+        let first = this.Format_ node.FirstExpression
+        let second = this.Format_ node.SecondExpression
+
+        // group (first </> indent 4 (text op <+> second)) |> Docs.Push
+        (*
+        WHERE a = b
+              AND b = c
+              AND c = d
+        *)
+        // align (first <*> (text op </> second)) |> Docs.Push
+        (*
+        WHERE a = b AND 
+              b = c AND
+              c = d
+        *)
+        // first </> nest 4 (text op <*> second) |> Docs.Push
+        (*
+        WHERE a = b
+            AND c = d
+                OR e = f
+        *)
+        continuousIndent underlying.Options [ first; text op <+> second ]
+        |> Docs.Push
+    // first </> indent 4 (text op <+> second) |> Docs.Push
+
+    override this.ExplicitVisit(node: BooleanComparisonExpression) =
+        ppBooleanComparisonExpression underlying node |> Docs.Push
+
+    override this.ExplicitVisit(node: SelectScalarExpression) =
+        printfn "SelectScalarExpression"
+        Docs.Push(text <| underlying.GenerateScript(node))
 
     override this.ExplicitVisit(querySpecification: QuerySpecification) =
         (*
@@ -215,19 +279,21 @@ type FormattingVisitor
             [ <GROUP BY> ]   
             [ HAVING < search_condition > ]
         *)
-        let selectElements =
+        // let uniqueRowFilter = pp underlying querySpecification.UniqueRowFilter
+        let selectList =
             querySpecification.SelectElements
-            |> Seq.map (text << underlying.GenerateScript)
+            // |> Seq.map (text << underlying.GenerateScript)
+            |> Seq.map this.Format
             |> Seq.toList
+
+        printfn "Select list: %A" selectList
 
         let selectElement =
             Some(
                 text "SELECT",
-                continuousIndent
-                    underlying.Options
-                    (punctuate comma selectElements)
+                continuousIndent underlying.Options (punctuate comma selectList)
             )
-            
+
         let fromClause =
             Option.ofObj querySpecification.FromClause
             |> Option.bind (fun fromClause ->
@@ -235,7 +301,8 @@ type FormattingVisitor
             |> Option.map (fun tableReferences ->
                 let items =
                     tableReferences
-                    |> Seq.map (ppTableReference underlying)
+                    // |> Seq.map (ppTableReference underlying)
+                    |> Seq.map this.Format
                     |> Seq.toList
 
                 let newLineBeforeFromClause =
@@ -258,7 +325,9 @@ type FormattingVisitor
                     else
                         empty
 
-                ppBooleanExpression underlying searchCondition)
+                printfn "Where clause: %A" searchCondition
+                this.Format_ searchCondition)
+            // ppBooleanExpression underlying searchCondition)
             |> Option.map (fun body -> text "WHERE", body)
 
         let orderByClause =
@@ -268,7 +337,7 @@ type FormattingVisitor
         let groupByClause =
             pp underlying querySpecification.GroupByClause
             |> Option.map (fun body -> text "GROUP BY", body)
-            
+
         let havingClause =
             pp underlying querySpecification.HavingClause
             |> Option.map (fun body -> text "HAVING", body)
@@ -278,19 +347,11 @@ type FormattingVisitor
               fromClause
               whereClause
               orderByClause
-              groupByClause 
+              groupByClause
               havingClause ]
             |> List.collect Option.toList
 
-        this.Doc <-
-            if false && underlying.Options.AlignClauseBodies then
-                let (labels, bodies) = List.unzip clauses
-                // Doesn't work
-                beside (align (vcat labels)) (align (vcat bodies))
-            else
-                vcat (
-                    List.map (fun (label, body) -> label <+> body) clauses
-                )
+        Docs.Push(vcat (List.map (fun (label, body) -> label <+> body) clauses))
 
     member this.keyword(kw: string) : Doc =
         match underlying.Options.KeywordCasing with
@@ -301,17 +362,20 @@ type FormattingVisitor
         |> text
 
     override this.ExplicitVisit(node: OrderByClause) =
-        this.Doc <-
+        Docs.Push(
             if node = null then
                 empty
             else
                 text "ORDER BY"
                 <+> (node.OrderByElements
-                     |> Seq.map (fun expr ->
-                         text (underlying.GenerateScript expr))
+                     |> Seq.map this.Format
                      |> Seq.toList
                      |> punctuate comma
                      |> continuousIndent underlying.Options)
+        )
+
+    override this.ExplicitVisit(node: SchemaObjectFunctionTableReference) =
+        Docs.Push(text <| underlying.GenerateScript(node))
 
 let ppScript (editorconfig: FileConfiguration) (reader: TextReader) =
     let opts = SqlScriptGeneratorOptions()
@@ -329,7 +393,7 @@ let ppScript (editorconfig: FileConfiguration) (reader: TextReader) =
     errors |> Seq.iter (fun e -> printfn "%A" e.Message)
 
     fragment.Accept(formatter)
-    let mutable output = displayString formatter.Doc
+    let mutable output = displayStringW 40 formatter.Doc
 
     if editorconfig.TrimTrailingWhitespace.GetValueOrDefault(false) then
         output <- output.TrimEnd()
